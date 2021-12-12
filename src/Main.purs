@@ -14,7 +14,6 @@ module Main
   where
 
 import Prelude
-
 import Data.Foldable (any)
 import Data.Grid (Coordinates)
 import Data.List (List(..), (:), snoc, last)
@@ -26,7 +25,6 @@ import Data.Traversable (for_)
 import Effect (Effect)
 import Effect.Class (liftEffect)
 import Effect.Random (randomInt)
-
 import Reactor (getW, runReactor, updateW_)
 import Reactor.Events (Event(..))
 import Reactor.Graphics.Colors as Color
@@ -48,7 +46,6 @@ widthGlobal :: Int
 widthGlobal = 20
 heightGlobal :: Int
 heightGlobal = 20
-
 
 draw :: World -> Drawing
 draw { snake, food, enemy } = do
@@ -75,7 +72,7 @@ handleEvent event = do
       if (mod currentTick 30 == 0) && (mod currentTick 20 == 0) then do
         enemyAI
         snakeTurn
-      else if (mod currentTick 30 == 0) then do
+      else if (mod currentTick 1 == 0) then do
         enemyAI
         snakeDed
         foodEaten
@@ -152,12 +149,23 @@ enemyAI :: Reaction World
 enemyAI = do
   {enemy, food} <- getW
   let newTail = fromMaybe Nil $ List.init enemy
-  enemyPathfind enemy food newTail
-    where
-      enemyPathfind Nil _ _ = executeDefaultBehavior
-      enemyPathfind ({x, y} : _) {x: fx, y: fy} newTail
-        | (fx - x) > 0 = updateW_ {enemy: {x: x + 1, y} : newTail}  -- move right
-        | (fx - x) < 0 = updateW_ {enemy: {x: x - 1, y} : newTail}  -- move left
-        | (fy - y) > 0 = updateW_ {enemy: {x, y: y + 1} : newTail}  -- move up
-        | (fy - y) < 0 = updateW_ {enemy: {x, y: y - 1} : newTail}  -- move down
-        | otherwise = executeDefaultBehavior
+  coin <- liftEffect $ randomInt 0 1
+  if coin == 0 then
+    moveEnemyX enemy food newTail
+  else
+    moveEnemyY enemy food newTail 
+
+
+moveEnemyX :: List Coordinates -> Coordinates -> List Coordinates -> Reaction World
+moveEnemyX Nil _ _ = pure unit
+moveEnemyX ({x, y} : _) {x: fx, y: fy} newTail
+  | (fx - x) > 0 = updateW_ {enemy: {x: x + 1, y} : newTail}
+  | (fx - x) < 0 = updateW_ {enemy: {x: x - 1, y} : newTail}
+  | otherwise = moveEnemyY ({x, y} : Nil) {x: fx, y: fy} newTail
+
+moveEnemyY :: List Coordinates -> Coordinates -> List Coordinates -> Reaction World
+moveEnemyY Nil _ _ = pure unit
+moveEnemyY ({x, y} : _) {x: fx, y: fy} newTail 
+  | (fy - y) > 0 = updateW_ {enemy: {x, y: y + 1} : newTail}
+  | (fy - y) < 0 = updateW_ {enemy: {x, y: y - 1} : newTail}
+  | otherwise = (moveEnemyX ({x, y} : Nil) {x: fx, y: fy} newTail)
