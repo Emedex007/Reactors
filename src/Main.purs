@@ -5,18 +5,17 @@ module Main
   , generateFood
   , handleEvent
   , heightGlobal
-  , hitWall
   , main
   , snakeDed
+  , wallListGlobal
   , widthGlobal
   )
   where
 
 import Prelude
-
 import Data.Foldable (any)
 import Data.Grid (Coordinates)
-import Data.List (List(..), (:), snoc, last, (\\), (!!))
+import Data.List (List(..), (:), snoc, last, (\\), (!!), null)
 import Data.List as List
 import Data.Maybe (fromMaybe, Maybe(..))
 import Data.Set (Set)
@@ -32,7 +31,6 @@ import Reactor.Graphics.Drawing (Drawing, fill, tile)
 import Reactor.Reaction (Reaction)
 
 
-
 main :: Effect Unit
 main = do
   fx <- liftEffect (randomInt 0 $ widthGlobal - 1)
@@ -41,12 +39,13 @@ main = do
   let reactor = { initial, draw, handleEvent, isPaused: const false }
   runReactor reactor { title: "Snake", width: widthGlobal, height: heightGlobal }
 
-
 type World = { snake :: List Coordinates, food :: Coordinates, enemy :: List Coordinates, currentTick :: Int, snakeDirection :: {dx :: Int, dy :: Int}, enemyDirection :: {dx :: Int, dy :: Int} }
 widthGlobal :: Int
 widthGlobal = 20
 heightGlobal :: Int
 heightGlobal = 20
+
+-- creates a list of coordinates which are just outside of the border
 wallListGlobal :: List {x :: Int, y :: Int}
 wallListGlobal = 
   topbotBorder 0 (-1) <> topbotBorder 0 heightGlobal <> sidesBorder (-1) 0 <> sidesBorder widthGlobal 0
@@ -58,13 +57,11 @@ draw :: World -> Drawing
 draw { snake, food, enemy } = do
   let headSnake = fromMaybe {x: 0, y: 0} (List.head snake)
   let headEnemy = fromMaybe {x: 0, y: 0} (List.head enemy)
- 
   for_ snake $ \block -> fill Color.green400 $ tile block
   fill Color.green600 $ tile headSnake  --the head is different colour
   for_ enemy $ \block -> fill Color.blue400 $ tile block
   fill Color.blue600 $ tile headEnemy
   fill Color.red400 $ tile food
-
 
 handleEvent :: Event -> Reaction World
 handleEvent event = do
@@ -76,7 +73,7 @@ handleEvent event = do
     Tick {} -> do
       {currentTick} <- getW
       updateW_ {currentTick: currentTick + 1}
-      if (mod currentTick 30 == 0) && (mod currentTick 20 == 0) then do
+      if (mod currentTick 60 == 0) then do
         enemyAI
         snakeTurn
       else if (mod currentTick 30 == 0) then do
@@ -88,9 +85,9 @@ handleEvent event = do
       else
         pure unit
     _ -> pure unit
+
 snakeTurn :: Reaction World
 snakeTurn = do
-  hitWall
   snakeMove
   snakeDed
   foodEaten
@@ -99,8 +96,7 @@ snakeMove :: Reaction World
 snakeMove = do
   {snake, snakeDirection: {dx, dy}} <- getW
   let {x, y} = fromMaybe {x: 0, y: 0} $ List.head snake
-  let newTail = fromMaybe Nil $ List.init snake 
-  
+  let newTail = fromMaybe Nil $ List.init snake   
   updateW_ {snake: {x: x + dx, y: y + dy} : newTail}
 
 foodEaten :: Reaction World
@@ -109,48 +105,41 @@ foodEaten = do
   let headSnake = fromMaybe {x: 0, y: 0} $ List.head snake
   let headEnemy = fromMaybe {x: 0, y: 0} $ List.head enemy
   newFood <- liftEffect $ generateFood snake enemy Set.empty
-  
-  if headEnemy == food then do                                           -- -
-    let fedEnemy = snoc enemy $ fromMaybe {x: 0, y: 0} $ last enemy      -- checks if enemy eats food, it has priority over player
-    updateW_ {food: newFood, enemy: fedEnemy}                            -- -
-   
-  else if headSnake == food then do                                      -- -
-    let fedSnake = snoc snake $ fromMaybe {x: 0, y: 0} $ last snake      -- checks if player eats food
-    updateW_ {food: newFood, snake: fedSnake}                            -- -
-  
+  -- checks, if the enemy eats food
+  if headEnemy == food then do 
+    let fedEnemy = snoc enemy $ fromMaybe {x: 0, y: 0} $ last enemy 
+    updateW_ {food: newFood, enemy: fedEnemy} 
+  -- checks, if the player eats food
+  else if headSnake == food then do 
+    let fedSnake = snoc snake $ fromMaybe {x: 0, y: 0} $ last snake 
+    updateW_ {food: newFood, snake: fedSnake}                           
   else
     pure unit
 
 
+-- sets a new coordinate for food
 generateFood :: List Coordinates -> List Coordinates -> Set Coordinates -> Effect Coordinates
 generateFood snake enemy usedCoords = do
   fx <- randomInt 0 $ widthGlobal - 1
   fy <- randomInt 0 $ heightGlobal - 1
-  
-  if Set.member {x: fy, y: fy} usedCoords then                  -- využíváme Sety pro zaspsání již vyzkoušených pozic jídla, je rychlejší se ptát Setu, jestli je v něm nějaký prvek,
-    generateFood snake enemy usedCoords                         -- než to checkovat v Listech
-  else if any (_ == {x: fx, y: fy}) (snake <> enemy) then    -- makes sure so that the food doesnt spawn inside snake or enemy
+  -- sets are faster to check if we already tried the coordinate
+  if Set.member {x: fy, y: fy} usedCoords then
+    generateFood snake enemy usedCoords
+  -- makes sure so that the food doesnt spawn inside snake or enemy
+  else if any (_ == {x: fx, y: fy}) (snake <> enemy) then
     generateFood snake enemy $ Set.insert {x: fy, y: fy} usedCoords
   else
     (pure {x: fx, y: fy}) :: Effect Coordinates
 
-
+-- handles all causes of death
 snakeDed :: Reaction World
 snakeDed = do
-  {snake, enemy} <- getW
-  let head = fromMaybe {x: 0, y: 0} $ List.head snake
-  let tail = fromMaybe ({x: 0, y: 0} : Nil) $ List.tail snake
-  when (any (_ == head) tail || any (_ == head) enemy)                                                -- check, jestli had narazí do vlastního těla NEBO do enemy
-    (updateW_ {snake: ({x: 0, y: 0} : Nil), enemy: ({x: widthGlobal - 1, y: heightGlobal - 1} : Nil), snakeDirection: {dx: 0, dy: 0}})    -- update na začátek
-
-
-hitWall :: Reaction World
-hitWall = do
-  {snake, snakeDirection: {dx, dy}} <- getW
+  {snake, enemy, snakeDirection: {dx, dy}} <- getW
   let {x, y} = fromMaybe {x: 0, y: 0} $ List.head snake
-  when (any (_ == {x: x + dx, y: y + dy }) wallListGlobal)
-    (updateW_ {snake: ({x: 0, y: 0} : Nil), enemy: ({x: widthGlobal - 1, y: heightGlobal - 1} : Nil), snakeDirection: {dx: 0, dy: 0}, enemyDirection: {dx: 0, dy: 0}})
-  
+  let tail = fromMaybe ({x: 0, y: 0} : Nil) $ List.tail snake
+  when (any (_ == {x, y}) (tail <> enemy) || any (_ == {x: x + dx, y: y + dy }) wallListGlobal) 
+    (updateW_ {snake: ({x: 0, y: 0} : Nil), enemy: ({x: widthGlobal - 1, y: heightGlobal - 1} : Nil), snakeDirection: {dx: 0, dy: 0}})
+
 -- choseBestWay :: Reaction World
 -- choseBestWay = do
 --   {enemy, food} <- getW
@@ -176,6 +165,7 @@ hitWall = do
 --   | otherwise = updateW_ {enemyDirection: {dx: 0, dy: 0}}
 
 
+-- choses "the right way" relative to enemy, e.g. food is top left relative to enemy
 choseBestWay = do
   {enemy, food: {x: fx, y: fy}} <- getW
   pure ((xAxis fx enemy) : (yAxis fy enemy) : Nil)
@@ -188,35 +178,49 @@ choseBestWay = do
 enemyAI :: Reaction World
 enemyAI = do
   {enemy, snake} <- getW
-  shortWay <- choseBestWay
+  shortWayHelper <- choseBestWay
   let {x, y} = fromMaybe {x: 0, y: 0} $ List.head enemy
   let possibleDirections = ({x: x + 1, y}:{x: x - 1, y}:{x, y: y + 1}:{x, y: y - 1}:Nil)
-  let shortWay2 = shortWay \\ (snake <> enemy <> wallListGlobal)
-  let longWay = possibleDirections \\ shortWay
-  let longWay2 = longWay \\ (snake <> enemy <> wallListGlobal)
+  let shortWay = shortWayHelper \\ (snake <> enemy <> wallListGlobal)
+  let longWayHelper = possibleDirections \\ shortWayHelper
+  let longWay = longWayHelper \\ (snake <> enemy <> wallListGlobal)
   let newTail = fromMaybe Nil $ List.init enemy
   coin <- liftEffect $ randomInt 0 1
 
-  if List.length (shortWay2 <> longWay2) == 0 then 
+  if null (longWay <> shortWay) then
     updateW_ {enemy: ({x: widthGlobal - 1, y: heightGlobal - 1} : Nil)}
-  else if List.length shortWay2 == 2 then   
-    case shortWay2 !! coin of
-      Nothing -> pure unit
-      Just way -> updateW_ {enemy: (way : newTail)}
-  else if List.length shortWay2 == 1 then
-    case shortWay2 !! 0 of 
-      Nothing -> pure unit
-      Just way -> updateW_ {enemy: (way : newTail)}
-  else if List.length longWay2 == 2 then
-    case longWay2 !! coin of
-      Nothing -> pure unit
-      Just way -> updateW_ {enemy: (way : newTail)}
-  else
-    case longWay2 !! 0 of 
-      Nothing -> pure unit
-      Just way -> updateW_ {enemy: (way : newTail)}
+  else if not null shortWay then 
+    moveEnemy coin shortWay newTail
+  else 
+    moveEnemy coin longWay newTail
+  
+  where
+    moveEnemy coin ways newTail =
+      if coin < 0 then
+        pure unit      
+      else case ways !! coin of
+        Nothing -> moveEnemy (coin - 1) ways newTail
+        Just way -> updateW_ {enemy: (way : newTail)}
 
   
+  -- if List.length (shortWay2 <> longWay2) == 0 then 
+  --   updateW_ {enemy: ({x: widthGlobal - 1, y: heightGlobal - 1} : Nil)}
+  -- else if List.length shortWay2 == 2 then   
+  --   case shortWay2 !! coin of
+  --     Nothing -> pure unit
+  --     Just way -> updateW_ {enemy: (way : newTail)}
+  -- else if List.length shortWay2 == 1 then
+  --   case shortWay2 !! 0 of 
+  --     Nothing -> pure unit
+  --     Just way -> updateW_ {enemy: (way : newTail)}
+  -- else if List.length longWay2 == 2 then
+  --   case longWay2 !! coin of
+  --     Nothing -> pure unit
+  --     Just way -> updateW_ {enemy: (way : newTail)}
+  -- else
+  --   case longWay2 !! 0 of 
+  --     Nothing -> pure unit
+  --     Just way -> updateW_ {enemy: (way : newTail)}
 
 -- wallListGlobal :: List {x :: Int, y :: Int}
 -- wallListGlobal = wallList 0 (-1)
